@@ -1,0 +1,139 @@
+The Language Model Notebook
+A field guide to building small language models on a single laptop.
+
+Part one: what a language model actually does.
+A language model is a probability distribution over sequences of tokens. Given the
+tokens that came before, it assigns a score to every possible next token. Training
+does not teach the model facts in the way a textbook does. It shapes a function so
+that the next token it expects matches the token that really came next in the text.
+Everything else, the grammar, the tone, the recurring phrases, the way a paragraph
+tends to close, is a side effect of that single objective. When people say a model
+understands something, they usually mean the distribution it learned happens to be
+useful for the task in front of them.
+
+The objective has a name: maximum likelihood. For each position in a sequence we
+compute the probability the model gives to the correct token, take the logarithm,
+and average the negatives. That average is the cross entropy loss. It is measured in
+nats per token. A loss of zero would mean the model is certain and always right,
+which never happens on real text. A loss near the logarithm of the vocabulary size
+means the model is guessing uniformly. Most of the craft of training is about moving
+that number down without lying to yourself about why it went down.
+
+Part two: the tokenizer decides what the model can see.
+Before any matrix multiplication there is a decision about what counts as a symbol.
+The simplest choice is the byte. Every string becomes a sequence of integers between
+zero and two hundred fifty five. Nothing is ever out of vocabulary, no text needs a
+special case, and the mapping round-trips exactly. The cost is sequence length: an
+English word of five letters becomes five positions, and a character outside the
+ASCII range becomes several. Attention is quadratic in sequence length, so bytes are
+expensive, but they are honest.
+
+The alternative is a learned subword vocabulary. Start from bytes, count adjacent
+pairs, merge the most frequent pair into a new symbol, repeat a few thousand times.
+Frequent words collapse into one token, rare words split into pieces that still carry
+meaning, and the sequence gets shorter. The trade is that the vocabulary now has to
+be shipped with the model, and text that looks identical to a human can tokenize in
+surprising ways. Numbers are the classic example: a model may see one hundred as a
+single token and one thousand as two, and that asymmetry leaks into arithmetic.
+
+Part three: attention is a lookup that learns its own keys.
+A transformer block has two ingredients. The first is attention. Each position
+produces a query, a key, and a value by multiplying its vector with three learned
+matrices. The score between two positions is the dot product of a query with a key,
+scaled by the square root of the head dimension so that the numbers stay in a range
+where the exponential function behaves. Scores are masked so that a position cannot
+look at the future, then normalized with a softmax, then used to average the values.
+The result is a new vector for each position that mixes in information from the
+positions it was allowed to see.
+
+The second ingredient is the feed forward network. It expands each vector by a
+factor of four, applies a nonlinearity, and projects back down. Attention moves
+information between positions; the feed forward network transforms information
+within a position. Stack the two, wrap each in a residual connection and a layer
+normalization, and repeat. Depth is what turns a bag of local patterns into something
+that can track a subject across a paragraph.
+
+Part four: gradients by hand.
+Frameworks hide the calculus, and that is fine until something is wrong. Writing the
+backward pass yourself makes the failure modes visible. Every operation has a local
+derivative. Matrix multiplication transposes its partner. Softmax subtracts its own
+weighted average. Layer normalization subtracts the mean of the incoming gradient and
+projects out the component along the normalized input. The residual connection simply
+adds, which is why deep networks train at all: the gradient has a short path back to
+the embedding.
+
+The check that matters is finite differences. Pick a handful of parameters, nudge
+each one by a tiny epsilon in both directions, and compare the slope of the loss to
+the gradient the code produced. If the relative error is around one part in a million,
+the backward pass is right. If it is not, the bug is usually a missing transpose, a
+missing division by the batch size, or a mask applied after the softmax instead of
+before it.
+
+Part five: optimization is a control problem.
+Adam keeps a running average of the gradient and a running average of its square.
+Dividing one by the square root of the other gives every parameter its own effective
+step size, which is why the method survives badly scaled initialization. Weight decay
+is best applied directly to the weights rather than mixed into the gradient, so that
+the decay does not get rescaled by the second moment estimate. Warmup exists because
+early gradients are large and the second moment estimate is still mostly zeros.
+Cosine decay exists because a model near the end of training benefits from smaller
+steps.
+
+What you watch is not the training loss. Training loss will fall even when the model
+is memorizing. What you watch is the validation loss, measured on text the model has
+never seen. When validation loss stops falling while training loss keeps dropping,
+the model has started to store the corpus instead of learning its structure. More
+data, a smaller model, or stronger regularization are the honest responses. Training
+longer is not.
+
+Part six: sampling is a second model.
+Generation turns a distribution into text. Greedy decoding always takes the most
+likely token and quickly becomes repetitive, because the most likely continuation of
+a loop is the loop. Temperature divides the logits before the softmax: below one it
+sharpens the distribution, above one it flattens it. Top k keeps only the k most
+likely tokens and renormalizes, which removes the long tail of nonsense without
+touching the head. Nucleus sampling keeps the smallest set of tokens whose total
+probability exceeds a threshold, which adapts the cut to how confident the model is
+at that position.
+
+None of these settings change what the model knows. They change how boldly it commits.
+A low temperature on a small model produces fluent text that says very little. A high
+temperature produces variety that occasionally forgets the subject of the sentence.
+The useful range is narrow, and it moves with the amount of training.
+
+Part seven: what a small model can and cannot do.
+A model with a few hundred thousand parameters trained on a megabyte of text can
+learn spelling, punctuation, the shape of a sentence, and the cadence of a paragraph.
+It can continue a familiar passage in a way that sounds right for a few lines. It
+cannot reason about arithmetic it has not memorized, it cannot recall a fact that
+appeared once, and it cannot follow an instruction that was never in its training
+text. Those limits are not a bug in the code. They are the arithmetic of capacity and
+data.
+
+The honest framing is that a small model is a laboratory. You can train it in
+minutes, break it deliberately, watch a loss curve bend, and see exactly which change
+caused which effect. That experience transfers upward. The same attention, the same
+objective, the same optimizer, and the same sampling rules appear in models four
+orders of magnitude larger. Only the numbers change.
+
+Part eight: a checklist before you trust a result.
+First, confirm the loss is computed on held out text. Second, confirm the tokenizer
+round-trips a sample of the corpus byte for byte. Third, confirm the gradient check
+passes on a small model before trusting a long run. Fourth, confirm the checkpoint
+reloads into a model with the same shapes and produces the same logits. Fifth, print
+a sample. Numbers can look healthy while the text is garbage, and text can look
+plausible while the loss is wrong. Check both.
+
+Reproducibility is a feature. Fix the seed, log the configuration next to the
+checkpoint, and record the corpus size. When a run improves, you want to know which
+of the five things you changed actually mattered. When a run collapses, you want the
+exact numbers to compare against. A training log is a laboratory notebook, and the
+model is the experiment.
+
+Closing note.
+Everything in this notebook is built from arrays and arithmetic. There is no magic
+in a transformer, only a great deal of careful bookkeeping. Once you can write the
+forward pass, the backward pass, and the sampler yourself, every paper you read about
+language models becomes a set of small decisions you could have made differently.
+That is the point of building one from scratch: not to compete with the large models,
+but to stop treating them as opaque.
