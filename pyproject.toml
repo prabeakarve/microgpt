@@ -7,7 +7,7 @@ name = "microgpt-numpy"
 version = "1.0.0"
 description = "A GPT language model implemented from scratch in pure NumPy, with a hand-written backward pass."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "prabeakarve" }]
 keywords = ["gpt", "transformer", "language-model", "numpy", "from-scratch", "deep-learning"]
